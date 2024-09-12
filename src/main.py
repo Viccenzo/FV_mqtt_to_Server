@@ -1,0 +1,317 @@
+import pandas as pd
+#import sqlalchemy
+from sqlalchemy import (
+    create_engine,
+    MetaData,
+    Table,
+    Column,
+    DateTime,
+    exists,
+    inspect,
+    text,
+    Integer, 
+    String, 
+    Float, 
+    Boolean
+)
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.types import VARCHAR
+from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.dialects.postgresql import insert
+import os
+import dotenv
+import paho.mqtt.client as mqtt
+import time
+from datetime import datetime
+
+# Function to create DB engine
+def createEngine(user,passwd,server,database):    
+    engine = create_engine(f'postgresql://{user}:{passwd}@{server}/{database}', echo=False)
+    return engine
+
+def convert_to_numeric(df):
+    for column in df.columns:
+        if column != 'TIMESTAMP':  # Ignorar a coluna TIMESTAMP
+            try:
+                # Tenta converter a coluna para numérico
+                df[column] = pd.to_numeric(df[column])
+            except (ValueError, TypeError):
+                # Se houver erro, mantém a coluna como está
+                pass
+
+# Function to map types from pandas to SQLalchey
+def map_dtype(dtype):
+    if pd.api.types.is_integer_dtype(dtype):
+        return Integer
+    elif pd.api.types.is_float_dtype(dtype):
+        return Float
+    elif pd.api.types.is_datetime64_any_dtype(dtype):
+        return DateTime
+    elif pd.api.types.is_bool_dtype(dtype):
+        return Boolean
+    else:
+        return VARCHAR
+
+""" def insert_dataframe(engine, table_name, dataframe):
+
+    # Convert dataframe to dictionary format
+    records = dataframe.to_dict(orient='records')
+    
+    metadata = MetaData()
+    table = Table(table_name, metadata, autoload_with=engine)
+
+    with engine.connect() as conn:
+        with conn.begin():
+            for record in records:
+                stmt = insert(table).values(record)
+                stmt = stmt.on_conflict_do_nothing(index_elements=['timestamp'])  # Adjust this for your primary key column(s)
+                conn.execute(stmt) """
+
+def uploadToDB(engine, dataframe, table_name):
+    try:    #Try to incert data all at once (faster)
+        dataframe.to_sql(table_name, engine, if_exists='append', index=False)
+        print(f"Data successfully uploaded to a newly created {table_name} table!")
+    except: # Insert data with conflict handling (Slow)
+        print(f'primary key conflict, atempeting to insert data avoiding conflicts')
+        records = dataframe.to_dict(orient='records')
+
+        metadata = MetaData()
+        table = Table(table_name, metadata, autoload_with=engine)
+
+        with engine.connect() as conn:
+            with conn.begin():
+                for record in records:
+                    stmt = insert(table).values(record)
+                    stmt = stmt.on_conflict_do_nothing(index_elements=['TIMESTAMP'])
+                    conn.execute(stmt)
+
+# Function to check if a table exists inside the database
+def tableExists(tableName, engine):
+    ins = inspect(engine)
+    ret =ins.dialect.has_table(engine.connect(),tableName)
+    #print('Table "{}" exists: {}'.format(tableName, ret))
+    return ret
+
+# function to create a table on database
+def createTable(dataFrame, engine, tableName, column_types):
+    print(column_types)
+    metadata = MetaData()
+    table = Table(tableName, metadata, *(Column(name, column_types[name]) for name in column_types))
+    metadata.create_all(engine)
+
+# function that compare header between dataframe and databse to extract diferences
+def headerMismach(tableName, engine, dataFrame):
+    inspector = inspect(engine)
+    columns = inspector.get_columns(tableName)
+    column_names = [column['name'] for column in columns]
+    headers = dataFrame.columns.tolist()
+    missing_in_db = set(headers) - set(column_names)
+    return missing_in_db
+
+# function that adds missing columns present on pandas dataframe
+def addMissingColumn(missing_columns,engine,table_name,dataFrame):
+    metadata = MetaData()
+    for column_name in missing_columns:
+        column_types = {name: map_dtype(dtype) for name, dtype in dataFrame.dtypes.items()}
+        column_type = column_types[column_name]
+        alter_statement = text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type().compile(dialect=engine.dialect)}')
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(alter_statement)
+            print(f"column '{column_name}' sucessfully added")
+        except ProgrammingError as e:
+            print(f"Column creation error '{column_name}': {e}")
+
+def primaryKeyExists(engine, tableName):
+    metadata = MetaData()
+    inspector = inspect(engine)
+    primary_keys = inspector.get_pk_constraint(tableName)['constrained_columns']
+    return primary_keys
+
+def addPrimarykey(engine, tableName, keyName):
+    alter_statement = text(f'ALTER TABLE "{tableName}" ADD PRIMARY KEY ("{keyName}")')
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(alter_statement)
+    except ProgrammingError as e:
+        print(f"Set primary key error: {e}")
+
+def getTableUsers(engine, tableName):
+    fetchStatement = text(f'SELECT "user" FROM "tables" WHERE "table" = \'{tableName}\'')
+    #print(fetchStatement)
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                result = conn.execute(fetchStatement)
+                tableOwners = result.fetchall()
+                #print(tableOwners)
+                tableOwnerStrings = [owner[0] for owner in tableOwners]
+                return tableOwnerStrings[0].split(",")
+    except ProgrammingError as e:
+        print(f"Query execution error: {e}")
+        return []
+
+def createTableUser(engine,table,user):
+    create_statement = text(f'INSERT INTO "tables" ("table", "user") VALUES (\'{table}\', \'{user}\');')
+    #print(create_statement)
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                conn.execute(create_statement)
+    except ProgrammingError as e:
+        print(f"Set primary key error: {e}")
+
+def getRecentTimestamp(engine, tableName, user):
+    query = text(f'''
+        SELECT "TIMESTAMP" FROM "{tableName}"
+        ORDER BY "TIMESTAMP" DESC
+        LIMIT 1
+    ''')
+    
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query)
+            recent_row = result.fetchone()
+            if recent_row:
+                print(f"Most recent row in table {tableName} for user {user}: {recent_row}")
+                return recent_row
+            else:
+                print(f"No data found in table {tableName} for user {user}.")
+                return None
+    except ProgrammingError as e:
+        print(f"Error fetching most recent row: {e}")
+        return None
+
+def createMqttConnection(mqtt_broker,mqtt_port,topic,dbConnections):
+    client = mqtt.Client(userdata=dbConnections)
+    client.connect(mqtt_broker, mqtt_port)
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.loop_start()
+    
+def on_connect(client, userdata, flags, rc):
+    print(f"Conectado com o código de resultado {rc}")
+    client.subscribe("DB_INSERT/#")  # Subscrição ao tópico passado via userdata
+    client.subscribe("DB_GERT_RECENT_ROW/#")  # Subscrição ao tópico passado via userdata
+
+def on_message(client, userdata, msg):
+    print(f"Mensagem recebida no tópico {msg.topic}")
+    try:
+        command,user,tableName = msg.topic.split("/")
+    except Exception as e:
+        print(e)
+        client.publish(f'message/{user}/{tableName}', "Missing topic information on FV_mqtt_to_Server code ", qos=1)
+        return
+    
+    if command == "DB_INSERT":
+        try:    
+            df = pd.read_json(msg.payload.decode())
+            convert_to_numeric(df)
+        except Exception as e:
+            print(e)
+            client.publish(f'message/{user}/{tableName}', f'error decoding mqtt to dataframe: {e}', qos=1)
+            return
+        if 'TIMESTAMP' not in df:
+            print("Missing TIMESTAMP on Header")
+            client.publish(f'message/{user}/{tableName}', f'Missing TIMESTAMP on Header', qos=1)
+            return
+
+        df['TIMESTAMP'] = pd.to_datetime(df['TIMESTAMP'])
+        column_types = {name: map_dtype(dtype) for name, dtype in df.dtypes.items()}
+
+        for engine in userdata:
+            try:
+                #Check if table exist and create one otherwise (rethink this)
+                if not tableExists(tableName,userdata[0]):
+                    print('The table does not exist, creating table')
+                    createTable(df, engine, tableName,column_types)
+                    createTableUser(engine,tableName,user)
+                    primaryKey = primaryKeyExists(engine,tableName)
+                    if primaryKey == []:
+                        print(primaryKey)
+                        addPrimarykey(engine,tableName,'TIMESTAMP') # for now the only primary key is going to be timestamp, changein the future
+                
+                """
+                #Check if person is owner of the table (future)
+                owners = getTableUsers(engine,tableName)
+                if not owners:
+                    client.publish(f'message/{user}/{tableName}', f'Table exists but have no owners. Please Contact DB administrator', qos=1)
+                    return
+                isOwner = 0
+                for owner in owners:
+                    if owner == user:
+                        isOwner = 1
+                if isOwner == 0:
+                    client.publish(f'message/{user}/{tableName}', f'You dont have permission to insert data in this table, contact system administrator', qos=1)
+                    return
+                """
+
+                # Check for missmach on headers
+                missmach = headerMismach(tableName,engine,df)
+                if(len(missmach) != 0):
+                    #print(f'{len(missmach)} mismach were found, adding headers to database')
+                    client.publish(f'message/{user}/{tableName}', f'The header you are providing doesent match the server headres. Those are the extra headers: {missmach}', qos=1)
+                    return
+
+                #upload to database
+                print("uploading data to database")
+                print(df)
+                uploadToDB(engine,df,tableName)
+                client.publish(f'message/{user}/{tableName}', f'Sucessfull DB insertion', qos=1)
+            except Exception as e:
+                client.publish(f'message/{user}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
+    
+    if command == "DB_GERT_RECENT_ROW":
+        engine = userdata[0]
+
+        #Check if table exist and create one otherwise (rethink this)
+        if not tableExists(tableName,userdata[0]):
+            print("aqui")
+            client.publish(f'message/{user}/{tableName}', f'Table doesent exist', qos=1)
+            return
+
+        response = getRecentTimestamp(engine,tableName,user)
+
+        """
+        #Check if person is owner of the table (future)
+        owners = getTableUsers(engine,tableName)
+        if not owners:
+            client.publish(f'message/{user}/{tableName}', f'Table exists but have no owners. Please Contact DB administrator', qos=1)
+            return
+        isOwner = 0
+        for owner in owners:
+            if owner == user:
+                isOwner = 1
+        if isOwner == 0:
+            client.publish(f'message/{user}/{tableName}', f'You dont have permission to insert data in this table, contact system administrator', qos=1)
+            return
+        """
+        
+        client.publish(f'message/{user}/{tableName}', f'{response}', qos=1)
+ 
+
+def main():
+
+    dotenv.load_dotenv()
+    
+    servers = os.getenv("POSTGRESQL_SERVERS").split(';')
+
+    serverConnections = []
+
+    for server in servers:
+        arguments = server.split(',')
+        serverConnections.append(createEngine(arguments[0],arguments[1],arguments[2],arguments[3]))
+
+    #Connecting to MQTT Brokers
+    brokers = os.getenv("MQTT_BROKERS").split(';')
+
+    for broker in brokers:
+        arguments = broker.split(",")
+        createMqttConnection(arguments[0],int(arguments[1]),arguments[2],serverConnections)
+
+    while(1):
+        pass
+
+main()

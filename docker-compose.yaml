@@ -1,0 +1,8 @@
+version: '3.0'
+services:
+  
+  fv_mqtt_to_server:
+    container_name: fv_mqtt_to_server
+    build: .
+    restart: always
+    image: viccenzo/fv_mqtt_to_server
