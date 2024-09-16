@@ -1,4 +1,4 @@
-import pandas as pd
+"""import pandas as pd
 #import sqlalchemy
 from sqlalchemy import (
     create_engine,
@@ -23,10 +23,29 @@ import dotenv
 import paho.mqtt.client as mqtt
 import time
 from datetime import datetime
+#from sqlalchemy import insert
+from sqlalchemy import MetaData, Table
+from sqlalchemy.exc import SQLAlchemyError"""
+
+import os
+import pandas as pd
+import dotenv
+import paho.mqtt.client as mqtt
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Float, DateTime, Boolean, VARCHAR, inspect, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError, ProgrammingError
+import time
 
 # Function to create DB engine
 def createEngine(user,passwd,server,database):    
-    engine = create_engine(f'postgresql://{user}:{passwd}@{server}/{database}', echo=False)
+    engine = create_engine(f'postgresql://{user}:{passwd}@{server}/{database}', 
+                           echo=False,
+                           pool_size=20,          # Aumenta o número de conexões no pool
+                           max_overflow=40,       # Permite até 20 conexões adicionais
+                           pool_timeout=60,       # Aumenta o tempo de espera por uma conexão
+                           pool_recycle=3600,     # Tempo de reciclagem das conexões em segundos
+                           connect_args={'application_name': 'MQTT_BACKEND_WORKER1'}
+                           )
     return engine
 
 def convert_to_numeric(df):
@@ -67,29 +86,46 @@ def map_dtype(dtype):
                 stmt = stmt.on_conflict_do_nothing(index_elements=['timestamp'])  # Adjust this for your primary key column(s)
                 conn.execute(stmt) """
 
+
+
 def uploadToDB(engine, dataframe, table_name):
-    try:    #Try to incert data all at once (faster)
-        dataframe.to_sql(table_name, engine, if_exists='append', index=False)
-        print(f"Data successfully uploaded to a newly created {table_name} table!")
-    except: # Insert data with conflict handling (Slow)
-        print(f'primary key conflict, atempeting to insert data avoiding conflicts')
-        records = dataframe.to_dict(orient='records')
+    records = dataframe.to_dict(orient='records')
+    
+    # Carrega os metadados da tabela
+    metadata = MetaData()
+    table = Table(table_name, metadata, autoload_with=engine)
 
-        metadata = MetaData()
-        table = Table(table_name, metadata, autoload_with=engine)
-
+    try:
+        # Usando transação manualmente com a engine
         with engine.connect() as conn:
             with conn.begin():
-                for record in records:
-                    stmt = insert(table).values(record)
-                    stmt = stmt.on_conflict_do_nothing(index_elements=['TIMESTAMP'])
-                    conn.execute(stmt)
+                # Inserção em massa com tratamento de conflito
+                stmt = insert(table).values(records)
+
+                # Evitar conflitos com chaves duplicadas na coluna 'TIMESTAMP'
+                stmt = stmt.on_conflict_do_nothing(index_elements=['TIMESTAMP'])
+
+                # Executa a inserção em lote com tratamento de conflito
+                conn.execute(stmt)
+        
+        print(f"Data successfully uploaded to {table_name} table!")
+        return f"Data successfully uploaded to {table_name} table!"
+
+    except SQLAlchemyError as e:
+        # Captura qualquer erro relacionado ao SQLAlchemy e printa
+        print(f"An error occurred during the database operation: {e}")
+        return f"An error occurred during the database operation on table {table_name}: {e}"
+
+
 
 # Function to check if a table exists inside the database
 def tableExists(tableName, engine):
     ins = inspect(engine)
-    ret =ins.dialect.has_table(engine.connect(),tableName)
-    #print('Table "{}" exists: {}'.format(tableName, ret))
+    
+    # Use 'with' to ensure the connection is closed after use
+    with engine.connect() as connection:
+        ret = ins.dialect.has_table(connection, tableName)
+    
     return ret
 
 # function to create a table on database
@@ -258,8 +294,8 @@ def on_message(client, userdata, msg):
                 #upload to database
                 print("uploading data to database")
                 print(df)
-                uploadToDB(engine,df,tableName)
-                client.publish(f'message/{user}/{tableName}', f'Sucessfull DB insertion', qos=1)
+                dbMessage = uploadToDB(engine,df,tableName)
+                client.publish(f'message/{user}/{tableName}', dbMessage, qos=1)
             except Exception as e:
                 client.publish(f'message/{user}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
     
@@ -268,7 +304,6 @@ def on_message(client, userdata, msg):
 
         #Check if table exist and create one otherwise (rethink this)
         if not tableExists(tableName,userdata[0]):
-            print("aqui")
             client.publish(f'message/{user}/{tableName}', f'Table doesent exist', qos=1)
             return
 
@@ -312,6 +347,6 @@ def main():
         createMqttConnection(arguments[0],int(arguments[1]),arguments[2],serverConnections)
 
     while(1):
-        pass
+        time.sleep(1)
 
 main()
