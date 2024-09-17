@@ -116,8 +116,6 @@ def uploadToDB(engine, dataframe, table_name):
         print(f"An error occurred during the database operation: {e}")
         return f"An error occurred during the database operation on table {table_name}: {e}"
 
-
-
 # Function to check if a table exists inside the database
 def tableExists(tableName, engine):
     ins = inspect(engine)
