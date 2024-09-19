@@ -35,6 +35,7 @@ from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Float, D
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError, ProgrammingError
 import time
+import datetime
 
 # Function to create DB engine
 def createEngine(user,passwd,server,database):    
@@ -230,8 +231,26 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("DB_INSERT/#")  # Subscrição ao tópico passado via userdata
     client.subscribe("DB_GERT_RECENT_ROW/#")  # Subscrição ao tópico passado via userdata
 
+def createStatus(created_at, table_name, status, message, start_time, end_time, total_running_time):
+    # Definindo as colunas e seus tipos
+    data = {
+        'created_at': [created_at],  # timestamp
+        'Table_name': [table_name],  # text
+        'Status': [status],  # text
+        'Message': [message],  # text
+        'start_time': [start_time],  # timestamp
+        'end_time': [end_time],  # timestamp
+        'total_running_time': [total_running_time]  # double precision
+    }
+
+    # Criando o DataFrame
+    df = pd.DataFrame(data)
+
+    return df
+
 def on_message(client, userdata, msg):
     print(f"Mensagem recebida no tópico {msg.topic}")
+    mqttArivalTime = datetime.datetime.now()
     try:
         command,user,tableName = msg.topic.split("/")
     except Exception as e:
@@ -292,9 +311,28 @@ def on_message(client, userdata, msg):
                 #upload to database
                 print("uploading data to database")
                 print(df)
+                dataBaseStartUploadTime = datetime.datetime.now()
                 dbMessage = uploadToDB(engine,df,tableName)
+                dataBaseEndUploadTime = datetime.datetime.now()
                 client.publish(f'message/{user}/{tableName}', dbMessage, qos=1)
+                statusDF = createStatus(dataBaseEndUploadTime, tableName, "Success", "Data inserted successfully", mqttArivalTime, dataBaseEndUploadTime, (dataBaseEndUploadTime-mqttArivalTime).total_seconds())
+                
+                #criar uma função depois
+                records = statusDF.to_dict(orient='records')
+    
+                metadata = MetaData()
+                table = Table("TABLES_RUNNING_STATUS", metadata, autoload_with=engine)
+                
+                with engine.connect() as conn:
+                    with conn.begin():
+                        # Inserção em massa com tratamento de conflito
+                        stmt = insert(table).values(records)
+
+                        # Executa a inserção em lote com tratamento de conflito
+                        conn.execute(stmt)
+                
             except Exception as e:
+                print(e)
                 client.publish(f'message/{user}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
     
     if command == "DB_GERT_RECENT_ROW":
