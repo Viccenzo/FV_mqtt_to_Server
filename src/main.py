@@ -36,6 +36,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError, ProgrammingError
 import time
 import datetime
+import json
 
 # Function to create DB engine
 def createEngine(user,passwd,server,database):    
@@ -231,7 +232,7 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("DB_INSERT/#")  # Subscrição ao tópico passado via userdata
     client.subscribe("DB_GERT_RECENT_ROW/#")  # Subscrição ao tópico passado via userdata
 
-def createStatus(created_at, table_name, status, message, start_time, end_time, total_running_time):
+def createStatus(created_at, table_name, status, message, start_time, end_time, total_running_time, logger_start_time, logger_end_time, logger_time, mqtt_start_time, mqtt_end_time, mqtt_time, db_start_time, db_end_time, db_time):
     # Definindo as colunas e seus tipos
     data = {
         'created_at': [created_at],  # timestamp
@@ -240,7 +241,16 @@ def createStatus(created_at, table_name, status, message, start_time, end_time, 
         'Message': [message],  # text
         'start_time': [start_time],  # timestamp
         'end_time': [end_time],  # timestamp
-        'total_running_time': [total_running_time]  # double precision
+        'total_running_time': [total_running_time],  # double precision
+        'logger_start_time':  [logger_start_time], 
+        'logger_end_time': [logger_end_time], 
+        'logger_time': [logger_time], 
+        'mqtt_start_time': [mqtt_start_time], 
+        'mqtt_end_time': [mqtt_end_time], 
+        'mqtt_time': [mqtt_time], 
+        'db_start_time': [db_start_time], 
+        'db_end_time': [db_end_time], 
+        'db_time': [db_time]
     }
 
     # Criando o DataFrame
@@ -260,7 +270,8 @@ def on_message(client, userdata, msg):
     
     if command == "DB_INSERT":
         try:    
-            df = pd.read_json(msg.payload.decode())
+            data = json.loads(msg.payload.decode())
+            df = pd.read_json(data['df_data'])
             convert_to_numeric(df)
         except Exception as e:
             print(e)
@@ -315,10 +326,25 @@ def on_message(client, userdata, msg):
                 dbMessage = uploadToDB(engine,df,tableName)
                 dataBaseEndUploadTime = datetime.datetime.now()
                 client.publish(f'message/{user}/{tableName}', dbMessage, qos=1)
-                statusDF = createStatus(dataBaseEndUploadTime, tableName, "Success", "Data inserted successfully", mqttArivalTime, dataBaseEndUploadTime, (dataBaseEndUploadTime-mqttArivalTime).total_seconds())
-                
+                statusDF = createStatus(dataBaseEndUploadTime, tableName, 
+                                        "Success", 
+                                        "Data inserted successfully", 
+                                        datetime.datetime.fromisoformat(data['loggerRequestBeginTime']), 
+                                        dataBaseEndUploadTime, 
+                                        (dataBaseEndUploadTime-datetime.datetime.fromisoformat(data['loggerRequestBeginTime'])).total_seconds(),
+                                        datetime.datetime.fromisoformat(data['loggerRequestBeginTime']),
+                                        datetime.datetime.fromisoformat(data['loggerRequestEndTime']),
+                                        (datetime.datetime.fromisoformat(data['loggerRequestEndTime'])-datetime.datetime.fromisoformat(data['loggerRequestBeginTime'])).total_seconds(),
+                                        datetime.datetime.fromisoformat(data['loggerRequestEndTime']),
+                                        mqttArivalTime,
+                                        (mqttArivalTime-datetime.datetime.fromisoformat(data['loggerRequestEndTime'])).total_seconds(),
+                                        dataBaseStartUploadTime,
+                                        dataBaseEndUploadTime,
+                                        (dataBaseEndUploadTime-dataBaseStartUploadTime).total_seconds()
+                                        )
                 #criar uma função depois
                 records = statusDF.to_dict(orient='records')
+                print(records)
     
                 metadata = MetaData()
                 table = Table("TABLES_RUNNING_STATUS", metadata, autoload_with=engine)
@@ -330,7 +356,6 @@ def on_message(client, userdata, msg):
 
                         # Executa a inserção em lote com tratamento de conflito
                         conn.execute(stmt)
-                
             except Exception as e:
                 print(e)
                 client.publish(f'message/{user}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
