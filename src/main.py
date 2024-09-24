@@ -232,7 +232,7 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("DB_INSERT/#")  # Subscrição ao tópico passado via userdata
     client.subscribe("DB_GERT_RECENT_ROW/#")  # Subscrição ao tópico passado via userdata
 
-def createStatus(created_at, table_name, status, message, start_time, end_time, total_running_time, logger_start_time, logger_end_time, logger_time, mqtt_start_time, mqtt_end_time, mqtt_time, db_start_time, db_end_time, db_time):
+def createStatus(created_at, table_name, status, message, start_time, end_time, total_running_time, logger_start_time, logger_end_time, logger_time, mqtt_start_time, mqtt_end_time, mqtt_time, db_start_time, db_end_time, db_time, user):
     # Definindo as colunas e seus tipos
     data = {
         'created_at': [created_at],  # timestamp
@@ -250,7 +250,9 @@ def createStatus(created_at, table_name, status, message, start_time, end_time, 
         'mqtt_time': [mqtt_time], 
         'db_start_time': [db_start_time], 
         'db_end_time': [db_end_time], 
-        'db_time': [db_time]
+        'db_time': [db_time],
+        'user': [user]
+
     }
 
     # Criando o DataFrame
@@ -326,7 +328,8 @@ def on_message(client, userdata, msg):
                 dbMessage = uploadToDB(engine,df,tableName)
                 dataBaseEndUploadTime = datetime.datetime.now()
                 client.publish(f'message/{user}/{tableName}', dbMessage, qos=1)
-                statusDF = createStatus(dataBaseEndUploadTime, tableName, 
+                statusDF = createStatus(dataBaseEndUploadTime,
+                                        tableName, 
                                         "Success", 
                                         "Data inserted successfully", 
                                         datetime.datetime.fromisoformat(data['loggerRequestBeginTime']), 
@@ -340,7 +343,8 @@ def on_message(client, userdata, msg):
                                         (mqttArivalTime-datetime.datetime.fromisoformat(data['loggerRequestEndTime'])).total_seconds(),
                                         dataBaseStartUploadTime,
                                         dataBaseEndUploadTime,
-                                        (dataBaseEndUploadTime-dataBaseStartUploadTime).total_seconds()
+                                        (dataBaseEndUploadTime-dataBaseStartUploadTime).total_seconds(),
+                                        user
                                         )
                 #criar uma função depois
                 records = statusDF.to_dict(orient='records')
