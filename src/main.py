@@ -120,13 +120,22 @@ def uploadToDB(engine, dataframe, table_name):
 
 # Function to check if a table exists inside the database
 def tableExists(tableName, engine):
-    ins = inspect(engine)
+    query = text('''
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_catalog = :database_name  -- Bind the database name
+        AND table_name = :table_name;         -- Bind the table name
+    ''')
     
-    # Use 'with' to ensure the connection is closed after use
-    with engine.connect() as connection:
-        ret = ins.dialect.has_table(connection, tableName)
+    with engine.connect() as conn:
+        # Execute the query and pass the parameters
+        result = conn.execute(query, {"database_name": "fotovoltaica", "table_name": tableName}).fetchone()
+        
+        # Extract the count from the first column of the result
+        count = result[0]  # This will give you the COUNT(*) result
     
-    return ret
+    # Return True if count > 0, else False
+    return count > 0
 
 # function to create a table on database
 def createTable(dataFrame, engine, tableName, column_types):
