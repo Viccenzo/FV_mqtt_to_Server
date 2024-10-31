@@ -293,8 +293,18 @@ def on_message(client, userdata, msg):
             client.publish(f'message/{user}/{tableName}', f'Missing TIMESTAMP on Header', qos=1)
             return
 
-        df['TIMESTAMP'] = pd.to_datetime(df['TIMESTAMP'])
-        column_types = {name: map_dtype(dtype) for name, dtype in df.dtypes.items()}
+        try:
+            df['TIMESTAMP'] = pd.to_datetime(df['TIMESTAMP'])
+        except:
+            print("Error parsing timestamp to SQL format")
+            client.publish(f'message/{user}/{tableName}', f'Error parsing timestamp to SQL format', qos=1)
+            return
+        try:
+            column_types = {name: map_dtype(dtype) for name, dtype in df.dtypes.items()}
+        except:
+            print("Error parsing dataframe data to SQL format")
+            client.publish(f'message/{user}/{tableName}', f'Error parsing dataframe data to SQL format', qos=1)
+            return
 
         for engine in userdata:
             try:
