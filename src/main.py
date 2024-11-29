@@ -119,23 +119,24 @@ def uploadToDB(engine, dataframe, table_name):
         return f"An error occurred during the database operation on table {table_name}: {e}"
 
 # Function to check if a table exists inside the database
-def tableExists(tableName, engine):
+def tableExists(tableName, engine, schemaName='public'):
     query = text('''
-        SELECT COUNT(*)
-        FROM information_schema.tables
-        WHERE table_catalog = :database_name  -- Bind the database name
-        AND table_name = :table_name;         -- Bind the table name
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = :schema_name
+            AND table_name = :table_name
+        );
     ''')
     
     with engine.connect() as conn:
         # Execute the query and pass the parameters
-        result = conn.execute(query, {"database_name": "fotovoltaica", "table_name": tableName}).fetchone()
+        result = conn.execute(query, {"schema_name": schemaName, "table_name": tableName}).fetchone()
         
-        # Extract the count from the first column of the result
-        count = result[0]  # This will give you the COUNT(*) result
+        # Extract the boolean result from the query
+        exists = result[0]  # This will give you True/False for the EXISTS clause
     
-    # Return True if count > 0, else False
-    return count > 0
+    return exists
 
 # function to create a table on database
 def createTable(dataFrame, engine, tableName, column_types):
@@ -336,8 +337,8 @@ def on_message(client, userdata, msg):
                 # Check for missmach on headers
                 missmach = headerMismach(tableName,engine,df)
                 if(len(missmach) != 0):
-                    #print(f'{len(missmach)} mismach were found, adding headers to database')
-                    client.publish(f'message/{user}/{tableName}', f'The header you are providing doesent match the server headres. Those are the extra headers: {missmach}', qos=1)
+                    addMissingColumn(missmach,engine,tableName,df)
+                    client.publish(f'message/{user}/{tableName}', f'The header you are providing doesent match the server headres. Those are the headers created: {missmach}', qos=1)
                     return
 
                 #upload to database
