@@ -138,12 +138,39 @@ def tableExists(tableName, engine, schemaName='public'):
     
     return exists
 
-# function to create a table on database
-def createTable(dataFrame, engine, tableName, column_types):
-    print(column_types)
+def insertTimestamp(engine, tableName, timestamp):
+    try:
+        tableNameQuoted = f'"{tableName}"'
+        with engine.connect() as conn:
+            conn.execute(text(f"""
+                INSERT INTO {tableNameQuoted} (TIMESTAMP)
+                VALUES (:timestamp);
+            """), {"timestamp": timestamp})
+            print(f"Inserted timestamp {timestamp} into {tableName}")
+    except Exception as e:
+        print(f"Error inserting timestamp into {tableName}: {e}")
+
+#function to create a table on database (antiga)
+def createTable(engine, tableName):
+    # Obtém o metadata para gerenciar as tabelas
     metadata = MetaData()
-    table = Table(tableName, metadata, *(Column(name, column_types[name]) for name in column_types))
+    
+    # Define a estrutura da tabela
+    table = Table(
+        tableName, 
+        metadata,
+        Column('TIMESTAMP', DateTime, primary_key=True, quote=True)  # Nome da coluna em maiúsculas e case-sensitive
+    )
+    
+    # Cria a tabela no banco de dados
     metadata.create_all(engine)
+    print(f"Tabela '{tableName}' criada com sucesso.")
+
+    now = datetime.datetime.now() - datetime.timedelta(hours=5)
+    initial_record = pd.DataFrame([{'TIMESTAMP': now}])
+
+    uploadToDB(engine, initial_record, tableName)
+    
 
 # function that compare header between dataframe and databse to extract diferences
 def headerMismach(tableName, engine, dataFrame):
@@ -274,10 +301,10 @@ def on_message(client, userdata, msg):
     print(f"Mensagem recebida no tópico {msg.topic}")
     mqttArivalTime = datetime.datetime.now()
     try:
-        command,user,tableName = msg.topic.split("/")
+        command,user,service,tableName = msg.topic.split("/")
     except Exception as e:
         print(e)
-        client.publish(f'message/{user}/{tableName}', "Missing topic information on FV_mqtt_to_Server code ", qos=1)
+        client.publish(f'message/{user}/{service}/{tableName}', "Missing topic information on FV_mqtt_to_Server code ", qos=1)
         return
     
     if command == "DB_INSERT":
@@ -287,24 +314,24 @@ def on_message(client, userdata, msg):
             convert_to_numeric(df)
         except Exception as e:
             print(e)
-            client.publish(f'message/{user}/{tableName}', f'error decoding mqtt to dataframe: {e}', qos=1)
+            client.publish(f'message/{user}/{service}/{tableName}', f'error decoding mqtt to dataframe: {e}', qos=1)
             return
         if 'TIMESTAMP' not in df:
             print("Missing TIMESTAMP on Header")
-            client.publish(f'message/{user}/{tableName}', f'Missing TIMESTAMP on Header', qos=1)
+            client.publish(f'message/{user}/{service}/{tableName}', f'Missing TIMESTAMP on Header', qos=1)
             return
 
         try:
             df['TIMESTAMP'] = pd.to_datetime(df['TIMESTAMP'])
         except:
             print("Error parsing timestamp to SQL format")
-            client.publish(f'message/{user}/{tableName}', f'Error parsing timestamp to SQL format', qos=1)
+            client.publish(f'message/{user}/{service}/{tableName}', f'Error parsing timestamp to SQL format', qos=1)
             return
         try:
             column_types = {name: map_dtype(dtype) for name, dtype in df.dtypes.items()}
         except:
             print("Error parsing dataframe data to SQL format")
-            client.publish(f'message/{user}/{tableName}', f'Error parsing dataframe data to SQL format', qos=1)
+            client.publish(f'message/{user}/{service}/{tableName}', f'Error parsing dataframe data to SQL format', qos=1)
             return
 
         for engine in userdata:
@@ -338,7 +365,7 @@ def on_message(client, userdata, msg):
                 missmach = headerMismach(tableName,engine,df)
                 if(len(missmach) != 0):
                     addMissingColumn(missmach,engine,tableName,df)
-                    client.publish(f'message/{user}/{tableName}', f'The header you are providing doesent match the server headres. Those are the headers created: {missmach}', qos=1)
+                    client.publish(f'message/{user}/{service}/{tableName}', f'The header you are providing doesent match the server headres. Those are the headers created: {missmach}', qos=1)
                     return
 
                 #upload to database
@@ -347,7 +374,7 @@ def on_message(client, userdata, msg):
                 dataBaseStartUploadTime = datetime.datetime.now()
                 dbMessage = uploadToDB(engine,df,tableName)
                 dataBaseEndUploadTime = datetime.datetime.now()
-                client.publish(f'message/{user}/{tableName}', dbMessage, qos=1)
+                client.publish(f'message/{user}/{service}/{tableName}', dbMessage, qos=1)
                 statusDF = createStatus(dataBaseEndUploadTime,
                                         tableName, 
                                         "Success", 
@@ -382,14 +409,17 @@ def on_message(client, userdata, msg):
                         conn.execute(stmt)
             except Exception as e:
                 print(e)
-                client.publish(f'message/{user}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
+                client.publish(f'message/{user}/{service}/{tableName}', f'error while treating data to upload to DB: {e}', qos=1)
     
     if command == "DB_GERT_RECENT_ROW":
         engine = userdata[0]
 
         #Check if table exist and create one otherwise (rethink this)
         if not tableExists(tableName,userdata[0]):
-            client.publish(f'message/{user}/{tableName}', f'Table doesent exist', qos=1)
+            createTable(engine,tableName)
+            #currentTimestamp = datetime.datetime.now()
+            #insertTimestamp(engine,tableName,currentTimestamp)
+            client.publish(f'message/{user}/{service}/{tableName}', f'Table doesent exist, Creating table', qos=1)
             return
 
         response = getRecentTimestamp(engine,tableName,user)
@@ -409,7 +439,7 @@ def on_message(client, userdata, msg):
             return
         """
         
-        client.publish(f'message/{user}/{tableName}', f'{response}', qos=1)
+        client.publish(f'message/{user}/{service}/{tableName}', f'{response}', qos=1)
  
 
 def main():
