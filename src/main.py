@@ -138,6 +138,24 @@ def tableExists(tableName, engine, schemaName='public'):
     
     return exists
 
+# Function to check if a table exists inside the database
+def table_translate(tableName, engine):
+    query = text('''
+        SELECT translate_name FROM "TABLE_NAME_TRANSLATOR" WHERE original_name = :table_name
+    ''')
+
+    with engine.connect() as conn:
+        # Execute the query and pass the parameters
+        result = conn.execute(query, {"table_name": tableName}).fetchone()
+
+        # Check if a result was found
+        if result is not None:
+            traslation = result[0]  # Extract the value if the result is not None
+        else:
+            traslation = None  # Return None if no result is found
+
+    return traslation
+
 def insertTimestamp(engine, tableName, timestamp):
     try:
         tableNameQuoted = f'"{tableName}"'
@@ -336,10 +354,17 @@ def on_message(client, userdata, msg):
 
         for engine in userdata:
             try:
+                # Check for table name translation
+                table_name = table_translate(tableName,engine)
+                if table_name:
+                    tableName = table_name
+
+                print(tableName)
+
                 #Check if table exist and create one otherwise (rethink this)
                 if not tableExists(tableName,userdata[0]):
                     print('The table does not exist, creating table')
-                    createTable(df, engine, tableName,column_types)
+                    createTable(engine, tableName)
                     createTableUser(engine,tableName,user)
                     primaryKey = primaryKeyExists(engine,tableName)
                     if primaryKey == []:
@@ -413,6 +438,13 @@ def on_message(client, userdata, msg):
     
     if command == "DB_GERT_RECENT_ROW":
         engine = userdata[0]
+
+        # Check for table name translation
+        table_name = table_translate(tableName,engine)
+        if table_name:
+            tableName = table_name
+
+        print(tableName)
 
         #Check if table exist and create one otherwise (rethink this)
         if not tableExists(tableName,userdata[0]):
