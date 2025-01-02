@@ -39,8 +39,8 @@ import datetime
 import json
 
 # Function to create DB engine
-def createEngine(user,passwd,server,database):    
-    engine = create_engine(f'postgresql://{user}:{passwd}@{server}/{database}', 
+def createEngine(user, passwd, server, database, port=5432):    
+    engine = create_engine(f'postgresql://{user}:{passwd}@{server}:{port}/{database}', 
                            echo=False,
                            pool_size=20,          # Aumenta o número de conexões no pool
                            max_overflow=40,       # Permite até 20 conexões adicionais
@@ -452,7 +452,7 @@ def main():
 
     for server in servers:
         arguments = server.split(',')
-        serverConnections.append(createEngine(arguments[0],arguments[1],arguments[2],arguments[3]))
+        serverConnections.append(createEngine(arguments[0],arguments[1],arguments[2],arguments[3],int(arguments[4])))
 
     #Connecting to MQTT Brokers
     brokers = os.getenv("MQTT_BROKERS").split(';')
