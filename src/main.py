@@ -355,11 +355,15 @@ def on_message(client, userdata, msg):
         for engine in userdata:
             try:
                 # Check for table name translation
-                table_name = table_translate(tableName,engine)
-                if table_name:
-                    tableName = table_name
+                try:
+                    table_name = table_translate(tableName,engine)
+                    if table_name:
+                        tableName = table_name
 
-                print(tableName)
+                    print(f'Tabela traduzida para: {tableName}')
+                except:
+                    print(f'Falha ao traduzir tabela {tableName}')
+                    break
 
                 #Check if table exist and create one otherwise (rethink this)
                 if not tableExists(tableName,userdata[0]):
